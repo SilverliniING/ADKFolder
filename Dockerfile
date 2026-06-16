@@ -1,16 +1,25 @@
-# Use an official Python runtime as a parent image
+# Use an official lightweight Python runtime
 FROM python:3.11-slim
 
-# Set environment variables
-ENV PYTHONUNBUFFERED=True
-ENV APP_HOME=/app
-WORKDIR $APP_HOME
+# Prevent Python from writing .pyc files and enable unbuffered logging
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 
-# Copy local code to the container image
-COPY requirements.txt ./
+# Set the working directory inside the container
+WORKDIR /app
+
+# Copy dependency manifest first to leverage Docker layer caching
+COPY requirements.txt .
+
+# Install dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . ./
+# Copy the rest of your local agent code
+COPY . .
 
-# Run the web service on container startup
+# Expose port 8080 (the standard Cloud Run port)
+EXPOSE 8080
+
+# Run the FastAPI web server on startup
 CMD ["python", "agent.py"]
+
