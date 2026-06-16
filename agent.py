@@ -1,27 +1,14 @@
 import os
-from fastapi import FastAPI
-from google.adk import Agent
-from google.adk.tools import google_search
+from dotenv import load_dotenv
+from google import adk
 
-app = FastAPI()
+# Load local variables from .env if present
+load_dotenv()
 
-# 1. Instantiate your ADK Agent 
-research_agent = Agent(
+# We set the default fallback model to gemini-2.5-flash
+root_agent = adk.Agent(
     name="analysis_agent",
-    model=os.environ.get("MODEL", "gemini-1.5-flash"),
-    instruction="You analyze research material and format specific insights.",
-    tools=[google_search]
+    model=os.environ.get("MODEL", "gemini-2.5-flash"),
+    instruction="""You are an academic data processing assistant. 
+    Analyze the text context provided and extract: university, professor, topic, summary."""
 )
-
-# 2. Expose an endpoint that matches the A2A platform expectations
-@app.post("/parse_gcs_document")
-async def run_agent_task(payload: dict):
-    # Your agent runtime logic executes here
-    response = research_agent.run(payload.get("message"))
-    return {"status": "success", "output": response}
-
-if __name__ == "__main__":
-    import uvicorn
-    # Cloud Run dynamically assigns a PORT environment variable at runtime
-    port = int(os.environ.get("PORT", 8080))
-    uvicorn.run(app, host="0.0.0.0", port=port)
