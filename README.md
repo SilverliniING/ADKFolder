@@ -78,6 +78,16 @@ python agent.py
 
 ```
 ---
+---
+## Run Webserver
+
+```bash
+curl -X POST http://localhost:8080/ \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Dr. Smith at Stanford University is giving a lecture on Quantum Computing basics today."}'
+
+```
+---
 
 ## Deactivating the Environment
 
