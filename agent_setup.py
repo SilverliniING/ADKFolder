@@ -6,7 +6,6 @@ Initializes the ADK agent with MCP tools and provides async execution wrapper.
 
 import logging
 import os
-from typing import Optional
 
 from google import adk
 from google.adk.agents import Agent
@@ -17,60 +16,81 @@ from google.genai import types
 
 from tools import (
     read_gcs_document,
-    extract_academic_metadata,
-    write_to_firestore,
     list_gcs_documents,
-    query_firestore,
+    parse_financial_document,
+    write_firestore_record,
+    match_documents,
+    query_firestore_matches,
+    generate_reconciliation_report,
+    format_report_as_text,
 )
 
-logger = logging.getLogger("academic_agent_mcp")
+logger = logging.getLogger("invoice_matching_agent")
 
 
 def create_agent() -> Agent:
     """
-    Create and configure the ADK agent with MCP tools.
+    Create and configure the ADK agent with invoice matching tools.
 
     The agent is initialized with:
     - Gemini 2.5 Flash model (or specified via MODEL env var)
-    - System instruction for academic document processing
-    - 5 MCP tools registered via FunctionTool
+    - System instruction for invoice-to-payment matching
+    - 7 MCP tools registered via FunctionTool
 
     Returns:
         Configured Agent instance
     """
     agent = Agent(
-        name="academic_agent",
+        name="invoice_matching_agent",
         model=os.environ.get("MODEL", "gemini-2.5-flash"),
-        instruction="""You are an academic document processing assistant with access to specialized tools.
+        instruction="""You are an invoice matching and reconciliation assistant with access to specialized financial tools.
 
 Your capabilities:
-- Read and parse documents from Google Cloud Storage using read_gcs_document
-- Extract structured metadata from academic papers using extract_academic_metadata
-- Store results in Firestore using write_to_firestore (only when explicitly requested)
-- List available documents using list_gcs_documents
-- Query stored data using query_firestore
+- List documents in GCS buckets using list_gcs_documents to discover all files
+- Read invoices and bank statements from Google Cloud Storage using read_gcs_document
+- Parse financial documents (invoices, payments) using parse_financial_document
+- Store parsed records in Firestore using write_firestore_record
+- Cross-reference invoices to payments using match_documents (handles errors gracefully)
+- Query matched/unmatched records using query_firestore_matches
+- Generate reconciliation reports using generate_reconciliation_report
+- Format reports as readable text using format_report_as_text
 
-When the user requests document analysis:
-1. Use read_gcs_document to fetch the document content
-2. Use extract_academic_metadata to parse structured information
-3. Only use write_to_firestore if the user explicitly asks to save or store results
-4. Provide a clear summary of findings
+When the user requests invoice matching:
+1. Read invoices from the invoices GCS bucket using read_gcs_document
+2. Parse each invoice using parse_financial_document (extract vendor, amount, date, reference number)
+3. Write each parsed invoice to Firestore invoices collection using write_firestore_record
+4. Read bank statements from the payments GCS bucket using read_gcs_document
+5. Parse each payment using parse_financial_document (extract vendor, amount, date, transaction ID)
+6. Write each parsed payment to Firestore bankstatements collection using write_firestore_record
+7. Use match_documents to cross-reference invoices with payments (by vendor name + amount, within ±7 days)
+   - This will return: matched_pairs, unmatched_invoices, unmatched_payments, error_invoices, error_payments
+   - Files with errors (malformed data) are gracefully skipped and reported as error_invoices or error_payments
+8. Use generate_reconciliation_report with the error_invoices and error_payments from match_documents result
+9. Use format_report_as_text to format the report as a readable table
 
-Always use your tools to fulfill requests. Never say you cannot access documents — use list_gcs_documents.
-Always be precise and cite specific information from documents.
-Focus on analyzing and summarizing documents; only write to storage when requested.""",
+Always be thorough in matching. Vendor names should be matched fuzzily (e.g., "Acme Inc" matches "ACME Corporation").
+Amounts must match exactly. Dates should be within 7 days of each other.
+Provide a clear reconciliation report with: matched pairs table, list of unmatched invoices, list of unmatched payments, and any error records (files that couldn't be processed due to data issues).
+
+Error Handling Notes:
+- If match_documents returns error_invoices or error_payments, pass them to generate_reconciliation_report
+- Error records are displayed in their own section with detailed error messages
+- This allows the matching process to continue even when some files have issues""",
         tools=[
             FunctionTool(read_gcs_document),
-            FunctionTool(extract_academic_metadata),
-            FunctionTool(write_to_firestore),
             FunctionTool(list_gcs_documents),
-            FunctionTool(query_firestore),
+            FunctionTool(parse_financial_document),
+            FunctionTool(write_firestore_record),
+            FunctionTool(match_documents),
+            FunctionTool(query_firestore_matches),
+            FunctionTool(generate_reconciliation_report),
+            FunctionTool(format_report_as_text),
         ]
     )
     return agent
 
 
-def create_runner(agent: Agent) -> Runner:
+def create_runner(agent: Agent):
     """
     Create an ADK Runner for the agent.
 
@@ -78,12 +98,12 @@ def create_runner(agent: Agent) -> Runner:
         agent: The agent to create a runner for
 
     Returns:
-        Configured Runner instance
+        Tuple of (Runner, SessionService)
     """
     session_service = InMemorySessionService()
     runner = Runner(
         agent=agent,
-        app_name="academic_pipeline",
+        app_name="invoice_matching_pipeline",
         session_service=session_service
     )
     return runner, session_service
@@ -95,17 +115,20 @@ agent_runner, session_service = create_runner(root_agent)
 
 # Tool metadata for API endpoints
 MCP_TOOLS_META = [
-    {"name": "read_gcs_document", "description": "Read and parse a document from GCS bucket."},
-    {"name": "extract_academic_metadata", "description": "Extract structured metadata from document content."},
-    {"name": "write_to_firestore", "description": "Write extracted metadata to Firestore."},
-    {"name": "list_gcs_documents", "description": "List all documents in a GCS bucket."},
-    {"name": "query_firestore", "description": "Query documents from Firestore collection."},
+    {"name": "read_gcs_document", "description": "Read invoice PDFs or bank statements from GCS bucket."},
+    {"name": "list_gcs_documents", "description": "List all documents in a GCS bucket, optionally filtered by prefix."},
+    {"name": "parse_financial_document", "description": "Extract vendor, amount, date from financial documents."},
+    {"name": "write_firestore_record", "description": "Write parsed invoice or payment record to Firestore."},
+    {"name": "match_documents", "description": "Cross-reference invoices to payments by vendor and amount."},
+    {"name": "query_firestore_matches", "description": "Query invoices or payments, optionally filtered by match status."},
+    {"name": "generate_reconciliation_report", "description": "Generate matched pairs and unmatched records report."},
+    {"name": "format_report_as_text", "description": "Format reconciliation report as human-readable table."},
 ]
 
 
 async def execute_agent_with_tools(user_input: str) -> str:
     """
-    Execute the ADK agent with MCP tools.
+    Execute the ADK agent with invoice matching tools.
 
     The agent processes the user input and can call any of the registered tools.
     The runner handles all tool calls automatically based on agent decisions.
@@ -117,9 +140,9 @@ async def execute_agent_with_tools(user_input: str) -> str:
         The agent's response text, or error message if execution fails
     """
     try:
-        # Create session for this request
+        # Create a session for this request
         session = session_service.create_session(
-            app_name="academic_pipeline",
+            app_name="invoice_matching_pipeline",
             user_id="cloud_run_environment"
         )
 
