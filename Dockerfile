@@ -21,5 +21,5 @@ COPY . .
 EXPOSE 8080
 
 # Run the FastAPI web server on startup
-CMD ["python", "agent.py"]
+CMD ["python", "main.py"]
 

@@ -1,6 +1,8 @@
 .venv
 .venv2
 .env
-*.sh
 .claude
 CLAUDE.md
+*.sh
+testSuite
+scripts
